@@ -86,7 +86,7 @@ def rcauth(request):
                 'email': institution_email.lower(),
                 'password': pwgen.pwgen(),
                 'first_name': first_name,
-                'last_name': request.session['attributes']['surname'],
+                'last_name': request.session['attributes'].get('surname',''),
             }
 
             # Check for an email collision.
@@ -276,6 +276,8 @@ def manage_auth_methods(request):
             return merge_auth_method(request)
         elif operation == 'removeAuth':
             return remove_auth_method(request)
-        return edit_auth_method(request)
-    # if GET, we'll just give the initial list of auth methods for the user
-    return list_auth_methods(request)
+        else:
+            return edit_auth_method(request)
+    else:
+        # if GET, we'll just give the initial list of auth methods for the user
+        return list_auth_methods(request)
