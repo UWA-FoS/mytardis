@@ -9,7 +9,7 @@ from urllib import urlencode
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
-from django.core.paginator import Paginator, EmptyPage, InvalidPage
+from django.core.paginator import Paginator, EmptyPage, InvalidPage, Page
 from django.core.urlresolvers import reverse
 from django.http import HttpResponse, HttpResponseNotFound, \
     HttpResponseForbidden
@@ -229,48 +229,91 @@ def retrieve_datafile_list(
         highlighted_dsf_pks = [int(r.pk) for r in results
                                if r.model_name == 'datafile' and
                                r.dataset_id_stored == int(dataset_id)]
-
         params['query'] = query.query_string()
 
     elif 'datafileResults' in request.session and 'search' in request.GET:
         highlighted_dsf_pks = [r.pk
                                for r in request.session['datafileResults']]
 
-    dataset_results = \
-        DataFile.objects.filter(
-            dataset__pk=dataset_id,
-        ).order_by('filename')
+    dataset_results = DataFile.objects.filter(dataset__pk=dataset_id)
 
     if request.GET.get('limit', False) and highlighted_dsf_pks:
         dataset_results = dataset_results.filter(pk__in=highlighted_dsf_pks)
         params['limit'] = request.GET['limit']
 
     filename_search = None
-
     if 'filename' in request.GET and request.GET['filename']:
         filename_search = request.GET['filename']
-        dataset_results = \
-            dataset_results.filter(filename__icontains=filename_search)
-
         params['filename'] = filename_search
 
-    # pagination was removed by someone in the interface but not here.
-    # need to fix.
-    pgresults = 100
-
-    paginator = Paginator(dataset_results, pgresults)
-
+    results_per_page = 100
     try:
         page = int(request.GET.get('page', '1'))
     except ValueError:
         page = 1
 
-    # If page request (9999) is out of range, deliver last page of results.
+    if 'dirs' not in request.GET:
+        show_dirs = False
+        if filename_search is not None:
+            dataset_results = \
+                dataset_results.filter(filename__icontains=filename_search)
+        dataset_results = dataset_results.order_by('filename')
 
-    try:
-        dataset = paginator.page(page)
-    except (EmptyPage, InvalidPage):
-        dataset = paginator.page(paginator.num_pages)
+        # pagination was removed by someone in the interface but not here.
+        # need to fix.
+        paginator = Paginator(dataset_results, results_per_page)
+        # If page request (9999) is out of range, deliver last page of results.
+        try:
+            dataset = paginator.page(page)
+        except (EmptyPage, InvalidPage):
+            dataset = paginator.page(paginator.num_pages)        
+    else:
+        show_dirs = True
+        params['dirs'] = request.GET['dirs']
+        count_where = "WHERE dataset_id = {}".format(dataset_id)
+        file_path_expr = "TRIM(LEADING '/' FROM CONCAT(directory,'/',filename))"
+        if filename_search is not None:
+            # PostgreSQL 9.5 doesn't allow the use of the file_path output
+            # column name (alias) in WHERE or ORDER clauses, so repeat the
+            # entire file_path_expr instead (here and in ORDER below).
+            # NOTE:
+            # do not use filename_search (unescaped user input) in where_fmt
+            # (avoid SQL injection).  Use %s and add to query_params instead.
+            query_params = [filename_search]
+            where_fmt = "POSITION(LOWER(%s) IN LOWER({})) > 0"
+            count_where += " AND " + where_fmt.format(file_path_expr)
+            # query_where doesn't need dataset.id (done in first .filter above)
+            query_where = " WHERE " + where_fmt.format(file_path_expr)
+        else:
+            query_where = ""
+            query_params = []
+
+        count_query_str = (
+            "SELECT COUNT(*) FROM tardis_portal_datafile " + count_where)
+        logger.debug("Count query='" + count_query_str + "' params='"
+                     + str(query_params) + "'")
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute(count_query_str, query_params)
+            row = cursor.fetchone()
+            count = row[0]
+            logger.debug("Count query: " + str(count) + " matches found")
+
+        query_str = (
+            'SELECT '
+            '  id, size, created_time, ' # fields used in template
+            +  file_path_expr + ' COLLATE "C" AS file_path '
+            '  FROM tardis_portal_datafile '
+            +  query_where +
+            '  ORDER BY ' + file_path_expr + ' COLLATE "C" '
+            '  LIMIT ' + str(results_per_page) +
+            '  OFFSET ' + str((page - 1) * results_per_page))
+        dataset_results = dataset_results.raw(query_str, query_params)
+
+        # The RawQuerySet returned above doesn't implement length(), so fake a
+        # Paginator and a coresponding Page for dataset_results in the template.
+        paginator = Paginator(range(count), results_per_page)
+        dataset = Page(dataset_results, page, paginator)
 
     is_owner = False
     has_download_permissions = authz.has_dataset_download_access(request,
@@ -294,6 +337,7 @@ def retrieve_datafile_list(
         'has_download_permissions': has_download_permissions,
         'has_write_permissions': has_write_permissions,
         'search_query': query,
+        'show_dirs': show_dirs,
         'params': urlencode(params),
     }
     _add_protocols_and_organizations(request, None, c)
