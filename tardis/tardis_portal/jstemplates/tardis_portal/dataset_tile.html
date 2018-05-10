@@ -56,11 +56,16 @@
 {{#show_instr_facil}}
 <p style="color:grey;font-size:100%;">
   {{#instrument}}
-  Instrument: {{instrument}}
+  <b>Instrument</b>: {{instrument}}
+    {{#instrument_rda_handle}}
+      <span style="margin-left: 1ex; margin-right: 1ex;">|</span>
+      <a target="_blank" href="{{instrument_rda_handle}}"
+	 title="Browse instrument page at Research Data Australia (RDA)">RDA ⧉</a>
+    {{/instrument_rda_handle}}
   {{/instrument}}
   {{#facility}}
   {{#instrument}}<br>{{/instrument}}
-  Facility: {{facility}}
+  <b>Facility</b>: {{facility}}
   {{/facility}}
 </p>
 {{/show_instr_facil}}

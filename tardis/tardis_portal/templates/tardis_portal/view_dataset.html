@@ -451,12 +451,23 @@ $('#modal-metadata .submit-button').live('click', function() {
         <small>
           {% if from_instrument %}
             <span style="margin-right: 2em;">
-              Instrument: {{ from_instrument }}
+              <b>Instrument</b>: {{ from_instrument }}
+              {% if instrument_rda_handle %}
+	        <span style="margin-left: 1ex; margin-right: 1ex;">|</span>
+		{% spaceless %}
+	        <a
+		   target="_blank"
+		   href="{{ instrument_rda_handle }}"
+                   title="Browse instrument page at Research Data Australia (RDA)">
+		  RDA ⧉
+		</a>
+		{% endspaceless %}
+              {% endif %}
             </span>
           {% endif %}
           {% if from_facility %}
-            <span style="margin-right: 2em;">
-              Facility: {{  from_facility }}
+            <span style="margin-right: 3em;">
+              <b>Facility</b>: {{  from_facility }}
             </span>
           {% endif %}
         </small>
@@ -465,7 +476,7 @@ $('#modal-metadata .submit-button').live('click', function() {
   {% if from_experiment %}
   <h4 style="padding-top: 4px">
       <small>
-      From the experiment:
+      <b>Experiment</b>:
       <a
          class="experiment-link"
          href="{{ from_experiment.get_absolute_url }}">
@@ -477,7 +488,7 @@ $('#modal-metadata .submit-button').live('click', function() {
         {% if other_experiments|length == 1 %}
         <h4 style="padding-top: 4px">
             <small>
-            From the experiment:
+            <b>Experiment</b>:
         {% for other_experiment in other_experiments %}
             <a
                class="experiment-link"

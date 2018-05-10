@@ -460,6 +460,27 @@ def __processExperimentParameters(request, form):
     return None
 
 
+def get_instrument_rda_handle(instrument_id):
+    '''
+    Customisation for UWA's TruDat + NIFCert MyTardis configuration.
+
+    If the instrument has a Research Data Australia (RDA) handle
+    specified in it's metadata, return the handle, otherwise an empty string.
+    '''
+    from tardis.tardis_portal.models import InstrumentParameter
+    from django.apps import apps as django_apps
+    if django_apps.is_installed("nifcert"):
+        from nifcert.schemas.instrument import tdr
+        params = InstrumentParameter.objects.filter(
+            name__name__exact=tdr.RDA_SERVICE_RECORD_NAME,
+            name__schema__namespace__exact=tdr.SCHEMA_NAMESPACE,
+            name__schema__name__exact=tdr.SCHEMA_NAME,
+            parameterset__instrument__id=instrument_id)
+        if len(params):
+            return params.first().string_value
+    return ''
+
+
 def get_dataset_info(dataset, include_thumbnail=False, exclude=None):  # too complex # noqa
     obj = model_to_dict(dataset)
     if exclude is None or 'datafiles' not in exclude or 'file_count' \
@@ -484,6 +505,11 @@ def get_dataset_info(dataset, include_thumbnail=False, exclude=None):  # too com
         if (dataset.instrument.facility
             and (exclude is None or 'facility' not in exclude)):
             obj['facility'] = dataset.instrument.facility.name
+
+        # Customisation for UWA's TruDat + NIFCert MyTardis configuration.
+        rda_handle = get_instrument_rda_handle(dataset.instrument.id)
+        if rda_handle:
+            obj['instrument_rda_handle'] = rda_handle
 
     if include_thumbnail:
         try:
