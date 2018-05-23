@@ -19,9 +19,40 @@
     jQuery('.dataset_selector_none').live('click', function() {
         $(this).parents('.datafiles').find('.datafile_checkbox').removeAttr("checked");
     });
+    jQuery('#download_all_matches_btn').live('click', function(event) {
+        search_val = $('#filename-search-text').val();
+        if (search_val) {
+            nsr_str = $('#num_search_results').text();
+            if (/^[0-9]+$/.test(nsr_str)) {
+                num_search_results = Number(nsr_str);
+            } else {
+                num_search_results = 0;
+            }
+            // If all the search result ids are already on the page, use them
+            if ($(".datafile").length == num_search_results) {
+		file_checkboxes = $(".datafile_checkbox");
+                data = file_checkboxes.map(function() { return this.value; })
+                                      .get().join(' ');
+                $('#download_all_matches_ids').val(data);
+                $('#matches-download').submit();
+                return;
+            }
+            // Else if all the search result ids aren't on the page, fetch them
+            let url = '{% url 'tardis.tardis_portal.views.retrieve_datafile_search_ids' dataset.id %}';
+            $.ajax({
+              async: false,
+              url: url,
+              data: { 'search' : search_val },
+              success: function (data, textStatus, jqXHR) {
+                $('#download_all_matches_ids').val(data);
+                $('#matches-download').submit();
+              }
+            });
+        }
+    });
     jQuery('#toggle_dirs_btn').live('click', function() {
         const
-	    pane_wide =   "span12",
+            pane_wide =   "span12",
             pane_narrow = "span4";
         let pane = $('#datafiles-wrapper-pane');
         let old_width, new_width, params;
@@ -36,9 +67,9 @@
         }
         pane.removeClass(old_width);
         pane.addClass(new_width);
-	$('#datafiles-pane').html(loadingHTML);
+        $('#datafiles-pane').html(loadingHTML);
         url = '{% url 'tardis.tardis_portal.views.retrieve_datafile_list' dataset.id %}' + params;
-	$('#datafiles-pane').load(url);
+        $('#datafiles-pane').load(url);
     });
 
     function get_new_parameter_name(name)

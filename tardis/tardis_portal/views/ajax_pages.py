@@ -208,6 +208,43 @@ def retrieve_parameters(request, datafile_id):
                         'tardis_portal/ajax/parameters.html', c))
 
 
+def _get_filepath_query_str(**args):
+    """Generate various raw SQL query strings for DataFile paths (internal)"""
+    where = []
+    tail = []
+    have_dataset = 'dataset' in args
+    have_search = 'search' in args and args['search'] is True
+    file_path_expr = "TRIM(LEADING '/' FROM CONCAT(directory,'/',filename))"
+    collate_expr = ' COLLATE "C"' # Postgres only allows double quoted locale
+    if have_dataset:
+        where = ['dataset_id=' + str(args['dataset'])]
+    if have_search:
+        where += ['POSITION(LOWER(%s) IN LOWER(' + file_path_expr + ')) > 0']
+    if 'count' in args:
+        if 'cols' in args or not have_dataset:
+            return ''          # non-count queries come after a dataset filter
+        cols = ['COUNT(*)']
+    elif 'cols' in args:
+        cols = args['cols']
+        if 'path' in cols:
+            cols.remove('path')
+            cols.insert(0, file_path_expr + collate_expr + ' AS file_path')
+        if 'order' in args:
+            tail += ['ORDER BY ' + file_path_expr + collate_expr]
+        if 'limit' in args:
+            tail += ['LIMIT ' + str(args['limit'])]
+        if 'offset' in args:
+            tail += ['OFFSET ' + str(args['offset'])]
+    else:
+        return ''
+    q = 'SELECT ' + ', '.join(cols) + ' FROM tardis_portal_datafile'
+    if where:
+        q += ' WHERE ' + ' AND '.join(where)
+    if tail:
+        q += ' ' + ' '.join(tail)
+    return q
+
+
 @never_cache  # too complex # noqa
 @authz.dataset_access_required
 def retrieve_datafile_list(
@@ -215,7 +252,6 @@ def retrieve_datafile_list(
         template_name='tardis_portal/ajax/datafile_list.html'):
 
     params = {}
-
     query = None
     highlighted_dsf_pks = []
 
@@ -242,13 +278,18 @@ def retrieve_datafile_list(
         params['limit'] = request.GET['limit']
 
     filename_search = None
-    if 'filename' in request.GET and request.GET['filename']:
-        filename_search = request.GET['filename']
-        params['filename'] = filename_search
+    num_search_results = None
+    if 'filename' in request.GET:
+        val = request.GET['filename']
+        if val:
+            filename_search = val
+            params['filename'] = val
 
     results_per_page = 100
     try:
         page = int(request.GET.get('page', '1'))
+        if page < 1:
+            page = 1
     except ValueError:
         page = 1
 
@@ -257,7 +298,12 @@ def retrieve_datafile_list(
         if filename_search is not None:
             dataset_results = \
                 dataset_results.filter(filename__icontains=filename_search)
+            # Defering QuerySet evaluation (num_search_results = len()) until
+            # after sort below eliminates a database query
+
         dataset_results = dataset_results.order_by('filename')
+        if filename_search is not None:
+            num_search_results = len(dataset_results)
 
         # pagination was removed by someone in the interface but not here.
         # need to fix.
@@ -266,53 +312,52 @@ def retrieve_datafile_list(
         try:
             dataset = paginator.page(page)
         except (EmptyPage, InvalidPage):
-            dataset = paginator.page(paginator.num_pages)        
+            dataset = paginator.page(paginator.num_pages)
     else:
         show_dirs = True
         params['dirs'] = request.GET['dirs']
-        count_where = "WHERE dataset_id = {}".format(dataset_id)
-        file_path_expr = "TRIM(LEADING '/' FROM CONCAT(directory,'/',filename))"
         if filename_search is not None:
-            # PostgreSQL 9.5 doesn't allow the use of the file_path output
-            # column name (alias) in WHERE or ORDER clauses, so repeat the
-            # entire file_path_expr instead (here and in ORDER below).
-            # NOTE:
-            # do not use filename_search (unescaped user input) in where_fmt
-            # (avoid SQL injection).  Use %s and add to query_params instead.
             query_params = [filename_search]
-            where_fmt = "POSITION(LOWER(%s) IN LOWER({})) > 0"
-            count_where += " AND " + where_fmt.format(file_path_expr)
-            # query_where doesn't need dataset.id (done in first .filter above)
-            query_where = " WHERE " + where_fmt.format(file_path_expr)
         else:
-            query_where = ""
             query_params = []
 
+        count = 0
         count_query_str = (
-            "SELECT COUNT(*) FROM tardis_portal_datafile " + count_where)
-        logger.debug("Count query='" + count_query_str + "' params='"
+            _get_filepath_query_str(count=True, dataset=dataset_id,
+                                    search=filename_search is not None))
+        logger.debug("Count query:\n    " + count_query_str + "\n    params='"
                      + str(query_params) + "'")
         from django.db import connection
         with connection.cursor() as cursor:
             cursor.execute(count_query_str, query_params)
             row = cursor.fetchone()
             count = row[0]
+            if filename_search is not None:
+                num_search_results = count
             logger.debug("Count query: " + str(count) + " matches found")
+        num_pages = (count + results_per_page - 1) / results_per_page
+        if num_pages and page > num_pages:
+            page = num_pages
 
         query_str = (
-            'SELECT '
-            '  id, size, created_time, ' # fields used in template
-            +  file_path_expr + ' COLLATE "C" AS file_path '
-            '  FROM tardis_portal_datafile '
-            +  query_where +
-            '  ORDER BY ' + file_path_expr + ' COLLATE "C" '
-            '  LIMIT ' + str(results_per_page) +
-            '  OFFSET ' + str((page - 1) * results_per_page))
+            _get_filepath_query_str(cols=['id','size', 'created_time','path'],
+                                    search=filename_search is not None,
+                                    order=True,
+                                    limit=results_per_page,
+                                    offset=(page - 1) * results_per_page))
+        logger.debug("Paths query:\n    " + query_str + "\n    params='"
+                     + str(query_params) + "'")
         dataset_results = dataset_results.raw(query_str, query_params)
 
-        # The RawQuerySet returned above doesn't implement length(), so fake a
-        # Paginator and a coresponding Page for dataset_results in the template.
-        paginator = Paginator(range(count), results_per_page)
+        # The RawQuerySet returned above doesn't implement length(), so fake an
+        # obj_list for the Paginator and Page used in the Django view template.
+        class RawQueryMinimalObjList(object):
+            def __init__(self, n):
+                self.n = n
+                self.ordered = True
+            def __len__(self):
+                return self.n
+        paginator = Paginator(RawQueryMinimalObjList(count), results_per_page)
         dataset = Page(dataset_results, page, paginator)
 
     is_owner = False
@@ -332,6 +377,7 @@ def retrieve_datafile_list(
         'immutable': immutable,
         'dataset': Dataset.objects.get(id=dataset_id),
         'filename_search': filename_search,
+        'num_search_results': num_search_results,
         'is_owner': is_owner,
         'highlighted_datafiles': highlighted_dsf_pks,
         'has_download_permissions': has_download_permissions,
@@ -342,6 +388,33 @@ def retrieve_datafile_list(
     }
     _add_protocols_and_organizations(request, None, c)
     return HttpResponse(render_response_index(request, template_name, c))
+
+
+@never_cache
+@authz.dataset_access_required
+def retrieve_datafile_search_ids(request, dataset_id):
+    """
+    Return a space-separated list of ids for all DataFiles in the specified
+    Dataset which have a path (directory + '/' + filename) matching the
+    'search' parameter.
+    """
+
+    ids_str = ''
+    search_param = 'search'
+    if search_param in request.GET:
+        search = request.GET[search_param]
+        if search:
+            ids_query = _get_filepath_query_str(dataset=dataset_id, cols=['id'],
+                                                search=True)
+            logger.debug('retrieve_datafile_search_ids("' + search
+                         + '") QUERY:\n    ' + ids_query)
+            datafiles_results = DataFile.objects.raw(ids_query, [search])
+            for row in datafiles_results:
+                if not row.verified:
+                    continue
+                row_id_str = str(row.id)
+                ids_str += (' ' + row_id_str) if ids_str else row_id_str
+    return HttpResponse(ids_str)
 
 
 @authz.dataset_write_permissions_required

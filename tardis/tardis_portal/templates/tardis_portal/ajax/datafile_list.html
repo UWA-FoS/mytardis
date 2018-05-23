@@ -44,6 +44,25 @@
       name="filename"
       onkeypress="javascript:filename_search_handler(event)"
       value="{{filename_search|default:''}}" />
+
+  <form id="matches-download" method="POST" action="{% url 'tardis.tardis_portal.download.streaming_download_datafiles' %}" target="_blank">{% csrf_token %}
+      {% if filename_search %}
+      <div class="row-fluid">
+	<span id="num_search_results">{{ num_search_results|default:'0' }}</span> match{% if not num_search_results or num_search_results != 1 %}es{% endif %}
+	{% if has_download_permissions and num_search_results > 0 %}
+	<div class="pull-right">
+	  <button type="submit" id="download_all_matches_btn" class="btn btn-mini download-selected">
+	    <i class="fa fa-download"></i>
+	    Download All Matches
+	  </button>
+	  <input type="hidden" name="datafileids" id="download_all_matches_ids"/>
+	  <input type="hidden" name="comptype" value="{{default_format}}"/>
+	  <input type="hidden" name="organization" value="{{default_organization}}"/>
+	</div>
+	{% endif %}
+      </div>
+      {% endif %}
+  </form>
 </p>
 
 <form id="datafile-download" method="POST" action="{% url 'tardis.tardis_portal.download.streaming_download_datafiles' %}" target="_blank">{% csrf_token %}
@@ -75,7 +94,7 @@
         <tbody>
         {% for datafile in datafiles.object_list %}
             <tr class="datafile search_match_file">
-                <td>
+                <td style="width: 2.5ex;" >
                     {% if has_download_permissions and datafile.verified %}
                         <input type="checkbox" style="" class="datafile_checkbox" name="datafile" value="{{datafile.id}}" />
                     {% endif %}
