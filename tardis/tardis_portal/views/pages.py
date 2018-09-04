@@ -362,7 +362,6 @@ def about(request):
     c = {'subtitle': 'About',
          'about_pressed': True,
          'nav': [{'name': 'About', 'link': '/about/'}],
-         'version': settings.MYTARDIS_VERSION,
          'custom_about_section': getattr(
              settings, 'CUSTOM_ABOUT_SECTION_TEMPLATE',
              'tardis_portal/about_include.html'),
@@ -481,10 +480,6 @@ class ExperimentView(TemplateView):
             c['has_read_or_owner_ACL'] = \
                 authz.has_read_or_owner_ACL(request, experiment.id)
 
-        # Enables UI elements for the publication form
-        c['pub_form_enabled'] = 'tardis.apps.publication_forms' in \
-                                settings.INSTALLED_APPS
-
         # Enables UI elements for the push_to app
         c['push_to_enabled'] = PushToConfig.name in settings.INSTALLED_APPS
         if c['push_to_enabled']:
@@ -536,17 +531,6 @@ class ExperimentView(TemplateView):
                     appurls.append(app['url'])
             except:
                 logger.debug('error when loading default exp apps')
-
-        from tardis.app_config import get_tardis_apps
-
-        for app_name, app in get_tardis_apps():
-            try:
-                appnames.append(
-                    sys.modules['%s.settings' % app].NAME)
-                appurls.append(
-                    reverse('%s.views.index' % app, args=[experiment.id]))
-            except:
-                logger.debug("No tab for %s" % app)
 
         c['apps'] = zip(appurls, appnames)
 

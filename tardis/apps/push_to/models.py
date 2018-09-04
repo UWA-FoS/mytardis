@@ -7,9 +7,11 @@ from django.contrib import admin
 from django.contrib.auth.models import User, Group
 from django.core.exceptions import ValidationError
 from django.db import models
-from paramiko import RSAKey, RSACert, SSHClient, MissingHostKeyPolicy, \
+from paramiko import RSAKey, SSHClient, MissingHostKeyPolicy, \
     AutoAddPolicy, PKey, DSSKey, ECDSAKey
 from paramiko.config import SSH_PORT
+from paramiko.message import Message
+from paramiko.py3compat import encodebytes
 
 from .apps import PushToConfig
 from .exceptions import NoSuitableCredential
@@ -48,31 +50,6 @@ class KeyPair(models.Model):
 
         super(KeyPair, self).save(*args, **kwargs)
 
-    @staticmethod
-    def _get_key_type_from_public_key(public_key):
-        public_key = StringIO(base64.b64decode(public_key))
-        length = int(public_key.read(4).encode('hex'), 16)
-        return public_key.read(length)
-
-    def __setattr__(self, attrname, val):
-        if attrname == 'public_key':
-            super(KeyPair, self).__setattr__(attrname,
-                                             self._validate_public_key(val))
-        else:
-            super(KeyPair, self).__setattr__(attrname, val)
-
-    def _validate_public_key(self, value):
-        if value:
-            # Check if the public key is in the id_rsa.pub format
-            pub_key_fields = value.split()
-            if len(pub_key_fields) >= 2:
-                public_key = pub_key_fields[1]
-            else:
-                public_key = value
-                # Extract the key type
-            self.key_type = KeyPair._get_key_type_from_public_key(public_key)
-            return public_key
-
     @property
     def key(self):
         """
@@ -102,7 +79,8 @@ class KeyPair(models.Model):
         elif self.key_type.startswith('ecdsa'):
             pkey = ECDSAKey(data=public_key, file_obj=private_key)
         elif self.key_type == 'ssh-rsa-cert-v01@openssh.com':
-            pkey = RSACert(data=public_key, privkey_file_obj=private_key)
+            pkey = RSAKey(data=public_key, file_obj=private_key)
+            pkey.load_certificate(Message(public_key))
         else:
             raise ValidationError('Unsupported key type: ' + self.key_type)
 
@@ -118,8 +96,12 @@ class KeyPair(models.Model):
         """
         if not isinstance(pkey, PKey):
             raise ValueError('invalid PKey object supplied')
-        self.key_type = pkey.get_name()
-        self.public_key = pkey.get_base64()
+        if pkey.public_blob is not None:
+            self.key_type = pkey.public_blob.key_type
+            self.public_key = encodebytes(pkey.public_blob.key_blob)
+        else:
+            self.key_type = pkey.get_name()
+            self.public_key = pkey.get_base64()
         self.private_key = None
         if pkey.can_sign():
             key_data = StringIO()

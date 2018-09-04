@@ -15,6 +15,7 @@ from django.contrib.auth.models import User, Group
 from django.contrib.sites.models import Site
 from django.core.urlresolvers import reverse
 from django.db import transaction
+from django.db import IntegrityError
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseRedirect
 from django.views.decorators.cache import never_cache
@@ -445,7 +446,7 @@ def remove_experiment_access_user(request, experiment_id, username):
             'All experiments must have at least one user as '
             'owner. Add an additional owner first before '
             'removing this one.')
-    elif expt_acls.count() == 0:
+    else:
         # the user shouldn't really ever see this in normal operation
         return HttpResponse(
             'Experiment has no permissions (of type OWNER_OWNED) !')
@@ -578,6 +579,10 @@ def create_group(request):
     if 'group' in request.GET:
         groupname = request.GET['group']
 
+    if not groupname:
+        return HttpResponse('Group name cannot be blank',
+                            status=400)
+
     if 'admin' in request.GET:
         admin = request.GET['admin']
 
@@ -585,18 +590,17 @@ def create_group(request):
         authMethod = request.GET['authMethod']
 
     try:
-        group = Group(name=groupname)
-        group.save()
-    except:
-        transaction.rollback()
+        with transaction.atomic():
+            group = Group(name=groupname)
+            group.save()
+    except IntegrityError:
         return HttpResponse('Could not create group %s '
                             '(It is likely that it already exists)' %
-                            (groupname))
+                            (groupname), status=409)
 
     adminuser = None
     if admin:
         if admin == settings.TOKEN_USERNAME:
-            transaction.rollback()
             return HttpResponse('User %s does not exist' %
                                 (settings.TOKEN_USERNAME))
         try:
@@ -609,10 +613,8 @@ def create_group(request):
                     authenticationMethod=authMethod).userProfile.user
 
         except User.DoesNotExist:
-            transaction.rollback()
             return HttpResponse('User %s does not exist' % (admin))
         except UserAuthentication.DoesNotExist:
-            transaction.rollback()
             return HttpResponse('User %s does not exist' % (admin))
 
         # create admin for this group and add it to the group

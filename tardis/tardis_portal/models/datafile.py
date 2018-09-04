@@ -118,6 +118,7 @@ class DataFile(models.Model):
         for dfo in self.file_objects.filter(verified=True):
             if dfo.cache_file():
                 return True
+        return False
 
     def get_default_storage_box(self):
         '''
@@ -675,17 +676,24 @@ class DataFileObject(models.Model):
                 if add_size:
                     database_update['size'] = actual['size']
             if same_values.get('size', True):
+                compute_md5 = getattr(settings, 'COMPUTE_MD5', True)
+                compute_sha512 = getattr(settings, 'COMPUTE_SHA512', True)
                 actual.update(compute_checksums(
                     self.file_object,
-                    compute_md5=True,
-                    compute_sha512=True))
-                for sum_type in ['md5sum', 'sha512sum']:
-                    if empty_value[sum_type]:
+                    compute_md5=compute_md5,
+                    compute_sha512=compute_sha512))
+
+                def collate_checksums(sum_type):
+                    if empty_value[sum_type] and add_checksums:
                         # all sums only ever empty when not required
-                        if add_checksums:
-                            database_update[sum_type] = actual[sum_type]
+                        database_update[sum_type] = actual[sum_type]
                     if actual[sum_type] == database[sum_type]:
                         same_values[sum_type] = True
+
+                if compute_md5:
+                    collate_checksums('md5sum')
+                if compute_sha512:
+                    collate_checksums('sha512sum')
 
         except IOError as ioe:
             same_values = {key: False for key in same_values.keys()}
@@ -732,16 +740,21 @@ class DataFileObject(models.Model):
 
 @receiver(pre_delete, sender=DataFileObject, dispatch_uid='dfo_delete')
 def delete_dfo(sender, instance, **kwargs):
+    '''
+    Deletes the actual file / object, before deleting the database record
+    '''
     can_delete = getattr(
         instance.storage_box.attributes.filter(key='can_delete').first(),
         'value', 'True')
-    if can_delete.lower() == 'true':
+    if can_delete.lower() == 'true' and instance.uri:
         try:
             instance.delete_data()
         except NotImplementedError:
             logger.info('deletion not supported on storage box %s, '
                         'for dfo id %s' % (str(instance.storage_box),
                                            str(instance.id)))
+    elif not instance.uri:
+        logger.warning('DFO %s has no URI, so no data to delete' % instance.id)
     else:
         logger.debug('Did not delete file dfo.id '
                      '%s, because deletes are disabled' % instance.id)

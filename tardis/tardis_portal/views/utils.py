@@ -430,10 +430,13 @@ def __processDatafileParameters(request, searchQueryType, form):
         datafile_results = __getFilteredDatafiles(
             request, searchQueryType, form.cleaned_data)
 
-        # let's cache the query with all the filters in the session so
-        # we won't have to keep running the query all the time it is needed
-        # by the paginator
-        request.session['datafileResults'] = datafile_results
+        # Previously, we cached the query with all the filters in the session
+        # so we wouldn't have to keep running the query each time it is needed
+        # by the paginator, but since Django 1.6, Django uses JSON instead of
+        # pickle to serialize session data, so it can't serialize arbitrary
+        # Python objects unless we write custom JSON serializers for them:
+        # request.session['datafileResults'] = datafile_results
+
         return datafile_results
     return None
 
@@ -452,10 +455,14 @@ def __processExperimentParameters(request, form):
 
     if form.is_valid():
         experiments = __getFilteredExperiments(request, form.cleaned_data)
-        # let's cache the query with all the filters in the session so
-        # we won't have to keep running the query all the time it is needed
-        # by the paginator
-        request.session['experiments'] = experiments
+
+        # Previously, we cached the query with all the filters in the session
+        # so we wouldn't have to keep running the query each time it is needed
+        # by the paginator, but since Django 1.6, Django uses JSON instead of
+        # pickle to serialize session data, so it can't serialize arbitrary
+        # Python objects unless we write custom JSON serializers for them:
+        # request.session['experiments'] = experiments
+
         return experiments
     return None
 
@@ -505,12 +512,18 @@ def get_dataset_info(dataset, include_thumbnail=False, exclude=None):  # too com
         if (dataset.instrument.facility
             and (exclude is None or 'facility' not in exclude)):
             obj['facility'] = dataset.instrument.facility.name
-
         # Customisation for UWA's TruDat + NIFCert MyTardis configuration.
         rda_handle = get_instrument_rda_handle(dataset.instrument.id)
         if rda_handle:
             obj['instrument_rda_handle'] = rda_handle
 
+    # Whether dataset thumbnails are enabled, i.e.
+    # include a thumbnail <div> in every tile:
+    obj['show_dataset_thumbnails'] = getattr(
+        settings, "SHOW_DATASET_THUMBNAILS", True)
+
+    # Whether this dataset tile's thumbnail is enabled.
+    # If not, still include a blank thumbnail <div>:
     if include_thumbnail:
         try:
             obj['thumbnail'] = reverse(
