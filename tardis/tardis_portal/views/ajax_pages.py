@@ -208,33 +208,35 @@ def retrieve_parameters(request, datafile_id):
                         'tardis_portal/ajax/parameters.html', c))
 
 
-def _get_filepath_query_str(**args):
+def _get_filepath_query_str(dataset=None,
+                            countOnly=False,
+                            addSearch=False,
+                            cols=[],
+                            order=False, limit=None, offset=None):
     """Generate various raw SQL query strings for DataFile paths (internal)"""
     where = []
     tail = []
-    have_dataset = 'dataset' in args
-    have_search = 'search' in args and args['search'] is True
     file_path_expr = "TRIM(LEADING '/' FROM CONCAT(directory,'/',filename))"
-    collate_expr = ' COLLATE "C"' # Postgres only allows double quoted locale
-    if have_dataset:
-        where = ['dataset_id=' + str(args['dataset'])]
-    if have_search:
+    # PORTABILITY NOTE: PostgreSQL requires locale to be in double quotes
+    collate_expr = ' COLLATE "C"'
+    if dataset is not None:       # allows dataset_id == 0 for future use
+        where = ['dataset_id=' + str(dataset)]
+    if addSearch:
         where += ['POSITION(LOWER(%s) IN LOWER(' + file_path_expr + ')) > 0']
-    if 'count' in args:
-        if 'cols' in args or not have_dataset:
-            return ''          # non-count queries come after a dataset filter
+    if countOnly:
+        if dataset is None or cols:
+            return ''
         cols = ['COUNT(*)']
-    elif 'cols' in args:
-        cols = args['cols']
+    elif cols:
         if 'path' in cols:
             cols.remove('path')
             cols.insert(0, file_path_expr + collate_expr + ' AS file_path')
-        if 'order' in args:
+        if order:
             tail += ['ORDER BY ' + file_path_expr + collate_expr]
-        if 'limit' in args:
-            tail += ['LIMIT ' + str(args['limit'])]
-        if 'offset' in args:
-            tail += ['OFFSET ' + str(args['offset'])]
+        if limit is not None:
+            tail += ['LIMIT ' + str(limit)]
+        if offset is not None:
+            tail += ['OFFSET ' + str(offset)]
     else:
         return ''
     q = 'SELECT ' + ', '.join(cols) + ' FROM tardis_portal_datafile'
@@ -323,10 +325,9 @@ def retrieve_datafile_list(
 
         count = 0
         count_query_str = (
-            _get_filepath_query_str(count=True, dataset=dataset_id,
-                                    search=filename_search is not None))
-        logger.debug("Count query:\n    " + count_query_str + "\n    params='"
-                     + str(query_params) + "'")
+            _get_filepath_query_str(countOnly=True,
+                                    dataset=dataset_id,
+                                    addSearch=filename_search is not None))
         from django.db import connection
         with connection.cursor() as cursor:
             cursor.execute(count_query_str, query_params)
@@ -334,19 +335,17 @@ def retrieve_datafile_list(
             count = row[0]
             if filename_search is not None:
                 num_search_results = count
-            logger.debug("Count query: " + str(count) + " matches found")
         num_pages = (count + results_per_page - 1) / results_per_page
         if num_pages and page > num_pages:
             page = num_pages
 
         query_str = (
-            _get_filepath_query_str(cols=['id','size', 'created_time','path'],
-                                    search=filename_search is not None,
+            _get_filepath_query_str(dataset=dataset_id,
+                                    addSearch=filename_search is not None,
+                                    cols=['id','size', 'created_time','path'],
                                     order=True,
                                     limit=results_per_page,
                                     offset=(page - 1) * results_per_page))
-        logger.debug("Paths query:\n    " + query_str + "\n    params='"
-                     + str(query_params) + "'")
         dataset_results = dataset_results.raw(query_str, query_params)
 
         # The RawQuerySet returned above doesn't implement length(), so fake an
@@ -406,8 +405,6 @@ def retrieve_datafile_search_ids(request, dataset_id):
         if search:
             ids_query = _get_filepath_query_str(dataset=dataset_id, cols=['id'],
                                                 search=True)
-            logger.debug('retrieve_datafile_search_ids("' + search
-                         + '") QUERY:\n    ' + ids_query)
             datafiles_results = DataFile.objects.raw(ids_query, [search])
             for row in datafiles_results:
                 if not row.verified:
